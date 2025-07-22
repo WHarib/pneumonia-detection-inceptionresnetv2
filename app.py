@@ -1,35 +1,29 @@
-import io, base64
-from typing import Optional
-from pathlib import Path
-
+import io, base64, os
 import numpy as np
 from PIL import Image
-from fastapi import FastAPI, UploadFile, File, Header, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import JSONResponse
 import tensorflow as tf
 from tensorflow import keras
-from huggingface_hub import hf_hub_download
+import cv2
 
 # ---------------- CONFIG ----------------
-REPO_ID   = "your-username/my-pneumonia-inceptionresnetv2"
-FILENAME  = "model.keras"
-IMG_SIZE  = (200, 200)          # change if you trained on another size
-THRESHOLD = 0.5
-EXPECT_KEY = None               # set to a string or env var if you want an API key
+# Use the local file you already COPY into the image
+MODEL_PATH = os.getenv("MODEL_PATH", "model.keras")
+
+IMG_SIZE   = (200, 200)          # what you trained on
+THRESHOLD  = float(os.getenv("THRESHOLD", 0.5))   # change if you want
 # ----------------------------------------
 
-app = FastAPI(title="Pneumonia Detection API", docs_url="/docs", redoc_url="/redoc")
-_model: Optional[keras.Model] = None
+app = FastAPI(title="Pneumonia Detection API (InceptionResNetV2)")
 
-def ensure_auth(x_api_key: Optional[str]):
-    if EXPECT_KEY and x_api_key != EXPECT_KEY:
-        raise HTTPException(401, "Invalid or missing API key.")
+_model = None
 
-def get_model() -> keras.Model:
+def get_model():
     global _model
     if _model is None:
-        local_path = hf_hub_download(repo_id=REPO_ID, filename=FILENAME)
-        _model = keras.models.load_model(local_path, compile=False)
+        # Just load locally; no hf_hub_download
+        _model = keras.models.load_model(MODEL_PATH, compile=False)
     return _model
 
 def preprocess(img: Image.Image) -> np.ndarray:
@@ -42,32 +36,26 @@ def overlay(img: Image.Image, label: str) -> str:
     Image.blend(img, Image.new("RGB", img.size, colour), 0.25).save(buf, "PNG")
     return base64.b64encode(buf.getvalue()).decode()
 
-@app.get("/", response_class=HTMLResponse)
-async def root():
-    return (
-        "<h1>Pneumonia Detection API – running</h1>"
-        "<p>POST an X-ray to <code>/predict</code>.</p>"
-    )
-
-@app.get("/health")
-async def health():
-    return {"ok": True}
+@app.get("/")
+def root():
+    return {"ok": True, "message": "POST an X-ray to /predict"}
 
 @app.post("/predict")
-async def predict(
-    file: UploadFile = File(...),
-    x_api_key: Optional[str] = Header(None)
-):
-    ensure_auth(x_api_key)
-    img = Image.open(io.BytesIO(await file.read())).convert("RGB")
+async def predict(file: UploadFile = File(...)):
+    try:
+        pil = Image.open(io.BytesIO(await file.read())).convert("RGB")
+    except Exception as e:
+        raise HTTPException(400, f"Bad image: {e}")
+
     model = get_model()
-    pred = float(model.predict(preprocess(img))[0][0])
+    pred = float(model.predict(preprocess(pil))[0][0])  # assuming index 0 is pneumonia prob as before
     label = "PNEUMONIA" if pred > THRESHOLD else "NORMAL"
-    conf  = round(pred if pred > THRESHOLD else 1 - pred, 4)
+    conf  = round(pred if label == "PNEUMONIA" else 1 - pred, 4)
 
     return JSONResponse({
         "diagnosis": label,
         "confidence": conf,
         "raw_score": pred,
-        "processed_image": overlay(img, label)
+        "threshold": THRESHOLD,
+        "processed_image": overlay(pil, label)
     })
