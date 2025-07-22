@@ -1,11 +1,8 @@
----
-title: Pneumonia Detection Inceptionresnetv2
-emoji: 🏃
-colorFrom: gray
-colorTo: indigo
+title: Pneumonia Detection API (InceptionResNetV2)
+emoji: 🫁
+colorFrom: blue
+colorTo: gray
 sdk: docker
+sdk_version: '1.0'
+app_file: app.py
 pinned: false
-license: mit
----
-
-Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
